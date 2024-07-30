@@ -1,0 +1,732 @@
+---
+title: "HM1.ML2"
+author: "Zahra Ahmadi"
+date: "2024-04-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+library(dplyr)
+library(tidyverse)
+library(gbm)
+library(psych)
+library(randomForest)
+library(tree)
+
+```
+
+```{r}
+data<- read_csv("/Users/zahra/Library/CloudStorage/OneDrive-SeattleUniversity/spring2024/ML2/decision trees/youth_data.csv")
+```
+
+```{r}
+#View(data)
+names(data)
+
+```
+```{r}
+#str(data)
+
+data["irmjfy"][data["irmjfy"] == 991 | data["irmjfy"] == 993] <- 0
+data["iralcfy"][data["iralcfy"] == 991 | data["iralcfy"] == 993] <- 0
+data["irmjfm"][data["irmjfm"] == 91 | data["irmjfm"] == 93] <- 0
+
+
+
+```
+```{r}
+
+# Convert only non-factor columns to factors
+unordered_factor_cols <- c('alcmdays', 'mrjydays',
+                           'mrjflag', 'alcflag', 'tobflag', # binary flag columns from substance
+                           'irsex', 'NEWRACE2', 'eduschlgo', 'imother', 'ifather', 'govtprog', 'PDEN10', 'COUTYP4') # unordered categories for demographics
+                           
+ordered_factor_cols <- c('EDUSCHGRD2','HEALTH2','POVERTY3','income','mrjmdays',"alcydays")
+
+# Check if columns are already factors
+unordered_factor_cols <- unordered_factor_cols[!sapply(data[unordered_factor_cols], is.factor)]
+ordered_factor_cols <- ordered_factor_cols[!sapply(data[ordered_factor_cols], is.factor)]
+
+# Convert to factors
+data[unordered_factor_cols] <- lapply(data[unordered_factor_cols], factor) # Correct columns to unordered factors (e.g. yes, no)
+data[ordered_factor_cols] <- lapply(data[ordered_factor_cols], factor, ordered=TRUE) # Correct columns to ordered factors (e.g. small, medium, large)
+
+```
+```{r}
+# looping through all columns
+for (col in names(data)) {
+  
+  if (is.factor(data[[col]])) {
+    
+    data[[col]][is.na(data[[col]])] <- names(sort(table(data[[col]]), decreasing = TRUE))[1]
+  }
+  
+  else if (is.numeric(data[[col]])) {
+    
+    data[[col]][is.na(data[[col]])] <- mean(data[[col]], na.rm = TRUE)
+  }
+}
+```
+```{r}
+#there is no longer any missing data in our data set
+sum(is.na(data))
+
+```
+#### Binary Classification
+```{r}
+featureselection<- randomForest(mrjflag~., data= data, ntree= 1000 , importance = TRUE)
+important_variables<-importance(featureselection, type=1)
+important_variables[order(important_variables, decreasing = TRUE), ]
+```
+# With feature selection we were able to get the most important variables for our response variable we will set aside the first variables as they already show high importance on our response variable 
+
+
+```{r}
+df<- data %>% select(c('mrjflag', 'tobflag', 'alcflag','FRDMEVR2','YOSELL2','yflmjmo','frdmjmon','YFLTMRJ2','stndsmj', 'alcydays', 'irsex', 'cigmdays', 'ANYEDUC3','NEWRACE2'))
+#View(df)
+str(df)
+```
+# Splitting the selected data into train and test
+
+
+```{r}
+set.seed(123)
+train.index<- sample(1:nrow(df), nrow(df)*0.7)
+df.train<- df[train.index,]
+df.test<- df[-train.index,]
+```
+# Model_1 Decision tree
+
+```{r}
+tree.model<-tree(mrjflag~. ,data= df.train)
+summary(tree.model)
+plot(tree.model)
+text(tree.model, pretty = 0)
+predict.tree<- predict(tree.model, newdata= df.test, type= "class")
+table(predict.tree, df.test$mrjflag)
+mean((predict.tree == df.test$mrjflag))
+#we got an accuracy of 89% ~ 90%
+```
+# cross validating to find the best 
+```{r}
+cv.mrj <- cv.tree(tree.model, FUN = prune.misclass)
+names(cv.mrj)
+cv.mrj
+```
+
+
+```{r}
+
+par(mfrow = c(1, 2))
+plot(cv.mrj$size, cv.mrj$dev, type = "b")
+plot(cv.mrj$k, cv.mrj$dev, type = "b")
+```
+
+# pruned tree
+```{r}
+prune.mrj <- prune.misclass(tree.model, best = 4)
+plot(prune.mrj)
+text(prune.mrj, pretty = 0)
+```
+```{r}
+tree.pred.prune <- predict(prune.mrj, df.test,
+    type = "class")
+table(tree.pred.prune, df.test$mrjflag)
+mean(tree.pred.prune== df.test$mrjflag)
+#pruning has no effeect on the improvment of the model
+```
+# The prunning has no improvment on the model 
+
+# Model_2 Bagging
+
+
+```{r}
+#Bagging
+all_predictors<- length(df.train)-1
+bag.model <- randomForest(mrjflag ~ ., data = df.train, mtry =all_predictors ,ntree= 1000, importance = TRUE)
+bag.model
+```
+```{r}
+
+yhat.bag <- predict(bag.model, newdata = df.test,type="class")
+mean(yhat.bag == df.test$mrjflag)
+table(yhat.bag, df.test$mrjflag)
+#there is 89% accuracy with bagging slightly worse
+```
+```{r}
+importance(bag.model)
+varImpPlot(bag.model)
+```
+```{r}
+# Get variable importance
+importance_df <- as.data.frame(importance(bag.model))
+
+
+importance_df <- importance_df[order(-importance_df$MeanDecreaseAccuracy), ]
+
+
+top_predictors <- head(importance_df, 20)
+
+
+top_predictors <- top_predictors[, c("MeanDecreaseAccuracy", "MeanDecreaseGini")]
+
+
+top_predictors$PREDICTORS <- rownames(top_predictors)
+
+
+#with decision tree-based models and want to understand the importance of variables in creating informative splits, MDG may provide more insights. 
+
+ggplot(data = top_predictors, aes(x = MeanDecreaseGini, y = reorder(PREDICTORS, MeanDecreaseGini))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  ggtitle("Variable Importance for Consumption of Marijuana") +
+  ylab("Variables") +
+  xlab("Mean Decrease in ") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5))
+```
+
+
+```{r}
+
+
+# Assuming df.train contains your training data
+# Assuming mrjflag is your target variable
+
+# Define the number of predictors
+n_predictors <- ncol(df.train) - 1  # Exclude the target variable
+
+# Use tuneRF to tune mtry
+rf_model <- randomForest(mrjflag ~ ., mtry= n_predictors, data = df.train)
+tuned_rf <- tuneRF(x = df.train[, -which(names(df.train) == "mrjflag")],
+                   y = df.train$mrjflag,
+                   ntreeTry = 1000,  # Number of trees to grow
+                   stepFactor = 1.5,  # Multiplicative factor to increase/decrease mtry
+                   improve = 0.05,  # Minimum improvement in node purity to consider splitting
+                   trace = TRUE, plot = TRUE)  # Print progress and plot mean decrease accuracy
+
+# Optimal mtry value
+print(tuned_rf)
+
+
+```
+# as it is shown the best mtry would be 3 since it is giving us the lowest 
+```{r}
+rf.binary<-randomForest(mrjflag ~ ., mtry= 3,ntree=1000, data = df.train)
+yhat.binary <- predict(rf.binary, newdata = df.test,type="class")
+mean(yhat.binary ==df.test$mrjflag)
+table(yhat.binary,df.test$mrjflag)
+#random forest the best with a 90% accu
+```
+
+
+# Boosting
+
+```{r}
+#Boosting
+
+
+boost.mrj <- gbm(mrjflag ~ ., data = df.train,
+    distribution = "gaussian", n.trees = 1000,
+    interaction.depth = 4, shrinkage = 0.2, verbose = F, cv =10)
+yhat.boost <- predict(boost.mrj,
+    newdata = df.test, n.trees = 1000, type = "response")
+
+
+pred.gbm <- predict(boost.mrj,
+    newdata = df.test, n.trees = 1000)
+
+
+pred_direction <- ifelse(pred.gbm > 1.5, 1, 0)
+
+
+table(pred_direction, df.test$mrjflag)
+
+
+mean(pred_direction == df.test$mrjflag)
+```
+
+# As it is clear the accuracy with the shirnkage of 0.2 is at 89%, in order to find the optimal shrinkage a loop is designed so that we can find the optimal shirnkage value that will give us the highest accuracy.
+```{r}
+# Define shrinkage parameter values
+shrinkage_vals <- seq(0.01, 0.2, by = 0.02)
+
+# Initialize accuracy vector to store accuracy values
+acc <- numeric(length(shrinkage_vals))
+
+# Loop through shrinkage values
+for (i in seq_along(shrinkage_vals)) {
+  shrinkage <- shrinkage_vals[i]
+  
+  # Fit gradient boosting model
+  gbm_model <- gbm(mrjflag ~ ., data = df.train, 
+                   distribution = "gaussian", n.trees = 1000, 
+                   shrinkage = shrinkage, interaction.depth = 4)
+  
+  # Compute test predictions
+  test_preds <- predict(gbm_model, newdata = df.test, n.trees = 1000)
+  
+  # Binarize predictions based on threshold
+  pred_direction <- ifelse(test_preds > 1.5, 1, 0)
+  
+  # Compute accuracy
+  acc[i] <- mean(pred_direction == df.test$mrjflag)
+}
+
+# Print accuracy vector
+print(acc)
+
+# Plot accuracy vs shrinkage
+plot(shrinkage_vals, acc, type = "b", xlab = "Shrinkage", 
+     ylab = "Accuracy", main = "Accuracy vs Shrinkage")
+
+# Find shrinkage value with highest accuracy
+best_shrinkage <- shrinkage_vals[which.max(acc)]
+best_shrinkage
+
+# Add abline to indicate the shrinkage value with highest accuracy
+abline(v = best_shrinkage, col = "red", lty = 2)
+```
+# As it is shown in the figure above the optimal shrinkage value would be 0.01 with the accuracy of 91%
+```{r}
+boost.binary<- gbm(mrjflag ~ ., data = df.train, 
+                   distribution = "gaussian", n.trees = 1000, 
+                   shrinkage = 0.01, interaction.depth = 4)
+
+yhat.boost.binary <- predict(boost.binary,
+    newdata = df.test, n.trees = 1000, type = "response")
+
+
+pred.gbm <- predict(boost.mrj,
+    newdata = df.test, n.trees = 1000)
+
+
+pred_binary <- ifelse(yhat.boost.binary > 1.5, 1, 0)
+
+
+table(pred_binary, df.test$mrjflag)
+
+
+mean(pred_binary == df.test$mrjflag)
+
+```
+#we can conclude that we get the best results with boosting
+
+
+```{r}
+summary.gbm(boost.binary)
+```
+
+```{r}
+rf_err2 <- data.frame(Trees = 1:1000, Error = rf.binary$err.rate[,"OOB"], Type = "RF, m=3")
+bag_err2 <- data.frame(Trees = 1:1000, Error = bag.model$err.rate[,"OOB"], Type = "BAG, m=13")
+boost_err2 <- data.frame(Trees = 1:1000, Error = boost.binary$train.error, Type = "BOOST, λ=0.01")
+
+
+# Combine all error data frames
+model_err2 <- rbind(rf_err2, bag_err2, boost_err2)
+
+# Plot the error rate for each model
+ggplot(data=model_err2, aes(x=Trees, y=Error)) +  geom_line(aes(color=Type)) + ggtitle("Methods vs Errors") +xlim(0,1000)+theme(plot.title = element_text(hjust=0.5))
+```
+
+
+## Multi Class 
+# understanding the classes 
+```{r}
+featureselection_multi<- randomForest(mrjydays~., data= data, ntree= 1000 , importance = TRUE)
+important_variables1<-importance(featureselection_multi, type=1)
+important_variables1[order(important_variables1, decreasing = TRUE), ]
+```
+```{r}
+df_multi<- data %>% select(c('FRDMEVR2', 'yflmjmo','mrjydays', 'iralcage','iralcfy','EDUSCHGRD2','frdmjmon','rlgfrnd','alcflag','PRLMTTV2', 'HEALTH2', 'NEWRACE2', 'rlgattd', 'POVERTY3','income','stndsmj', 'stndalc','COUTYP4', 'PRVDRGO2', 'tobflag', 'YFLTMRJ2'))
+```
+#splitting to train and test
+```{r}
+set.seed(123)
+train.index1<- sample(1:nrow(df_multi), nrow(df_multi)*0.7)
+df_multi.train<- df_multi[train.index1,]
+df_multi.test<- df_multi[-train.index1,]
+```
+#Model1_Desicion tree
+```{r}
+set.seed(123)
+tree_multi.model<-tree(mrjydays~. ,data= df_multi.train)
+summary(tree_multi.model)
+plot(tree_multi.model)
+text(tree_multi.model, pretty = 0)
+predict.tree_multi<- predict(tree_multi.model, newdata= df_multi.test, type= "class")
+table(predict.tree_multi, df_multi.test$mrjydays)
+mean((predict.tree_multi == df_multi.test$mrjydays))
+```
+# There is about 88% accuracy next we will try to pruning to see if we can improve the accuracy 
+```{r}
+
+cv.mrjday <- cv.tree(tree_multi.model, FUN = prune.misclass)
+names(cv.mrjday)
+cv.mrjday
+```
+```{r}
+par(mfrow = c(1, 2))
+plot(cv.mrjday$size, cv.mrjday$dev, type = "b")
+plot(cv.mrjday$k, cv.mrjday$dev, type = "b")
+```
+```{r}
+prune.mrjday <- prune.misclass(tree_multi.model, best = 4)
+plot(prune.mrjday)
+text(prune.mrjday, pretty = 0)
+```
+
+```{r}
+tree_multi.pred.prune <- predict(prune.mrjday, df_multi.test,
+    type = "class")
+table(tree_multi.pred.prune, df_multi.test$mrjydays)
+mean(tree_multi.pred.prune== df_multi.test$mrjydays)
+```
+#the pruning has not increase the accuracy
+
+#### Model2_Bagging
+```{r}
+#Bagging
+all_predictors1<- length(df_multi.train)-1
+bag.model_multi <- randomForest(mrjydays ~ ., data = df_multi.train, mtry =all_predictors1 ,ntree= 1000, importance = TRUE)
+bag.model_multi
+```
+```{r}
+
+yhat_multi.bag <- predict(bag.model_multi, newdata = df_multi.test,type="class")
+mean(yhat_multi.bag == df_multi.test$mrjydays)
+table(yhat_multi.bag, df_multi.test$mrjydays)
+#there is 87% accuracy with bagging which is less than when we were using the desicion tree
+```
+```{r}
+importance(bag.model_multi)
+varImpPlot(bag.model_multi)
+```
+```{r}
+# Get variable importance
+importance_df_multi <- as.data.frame(importance(bag.model_multi))
+
+
+importance_df_multi <- importance_df_multi[order(-importance_df$MeanDecreaseAccuracy), ]
+
+
+top_predictors_multi <- head(importance_df_multi, 20)
+
+
+top_predictors_multi <- top_predictors_multi[, c("MeanDecreaseAccuracy", "MeanDecreaseGini")]
+
+
+top_predictors_multi$PREDICTORS <- rownames(top_predictors_multi)
+
+
+#with decision tree-based models and want to understand the importance of variables in creating informative splits, MDG may provide more insights. 
+
+ggplot(data = top_predictors_multi, aes(x = MeanDecreaseGini, y = reorder(PREDICTORS, MeanDecreaseGini))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  ggtitle("Variable Importance for Consumption of Marijuana") +
+  ylab("Variables") +
+  xlab("Mean Decrease in ") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5))
+```
+#Model3_RandomForest
+```{r}
+n_predictors_multi <- ncol(df_multi.train) - 1  # Exclude the target variable
+
+# Use tuneRF to tune mtry
+rf_model1 <- randomForest(mrjydays ~ ., mtry= n_predictors_multi, data = df_multi.train)
+tuned_rf1 <- tuneRF(x = df_multi.train[, -which(names(df_multi.train) == "mrjydays")],
+                   y = df_multi.train$mrjydays,
+                   ntreeTry = 1000,  # Number of trees to grow
+                   stepFactor = 1.5,  # Multiplicative factor to increase/decrease mtry
+                   improve = 0.05,  # Minimum improvement in node purity to consider splitting
+                   trace = TRUE, plot = TRUE)  # Print progress and plot mean decrease accuracy
+
+# Optimal mtry value
+print(tuned_rf1)
+
+```
+```{r}
+rf.model2 <- randomForest(mrjydays ~ ., data = df_multi.train, mtry = 3,ntree=1000,importance = TRUE)
+yhat.rf <- predict(rf.model2, newdata = df_multi.test,type="class")
+
+table(yhat.rf,df_multi.test$mrjydays)
+mean(yhat.rf==df_multi.test$mrjydays)
+```
+```{r}
+boost1<-gbm(mrjydays ~ ., data = df_multi.train, distribution = "gaussian", n.trees = 1000, shrinkage = 0.01 , interaction.depth = 4)
+boost2<-gbm(mrjydays ~ ., data = df_multi.train, distribution = "gaussian", n.trees = 1000, shrinkage = 0.05 , interaction.depth = 4)
+boost3<-gbm(mrjydays ~ ., data = df_multi.train, distribution = "gaussian", n.trees = 1000, shrinkage = 0.1 , interaction.depth = 4)
+boost4<-gbm(mrjydays ~ ., data = df_multi.train, distribution = "gaussian", n.trees = 1000, shrinkage = 0.15 , interaction.depth = 4)
+boost5<-gbm(mrjydays ~ ., data = df_multi.train, distribution = "gaussian", n.trees = 1000, shrinkage = 0.2 , interaction.depth = 4)
+```
+
+
+```{r}
+boost1_err <- data.frame(Trees = 1:1000, Error = boost1$train.error, Type = "Boost1, λ=0.01")
+boost2_err <- data.frame(Trees = 1:1000, Error = boost2$train.error, Type = "Boost2, λ=0.05")
+boost3_err <- data.frame(Trees = 1:1000, Error = boost3$train.error, Type = "Boost3, λ=0.1")
+boost4_err <- data.frame(Trees = 1:1000, Error = boost4$train.error, Type = "Boost4, λ=0.15")
+boost5_err <- data.frame(Trees = 1:1000, Error = boost5$train.error, Type = "Boost5, λ=0.2")
+# Combine all error data frames
+model_err <- rbind(boost1_err, boost2_err, boost3_err,boost4_err,boost5_err)
+
+# Plot the error rate for each model
+ggplot(data=model_err, aes(x=Trees, y=Error)) + 
+  geom_line(aes(color=Type)) + ggtitle(" Train Error vs Number of Trees") +
+  xlim(0,200)+theme(plot.title = element_text(hjust=0.5))
+```
+```{r}
+boost.multi<- gbm(mrjydays ~ ., data = df_multi.train, 
+                   distribution = "gaussian", n.trees = 1000, 
+                   shrinkage = 0.2, interaction.depth = 4)
+boost.pred <- predict(boost.multi, newdata = df_multi.test, n.trees = 1000)
+  
+  classify <- function(x) {
+  cut(x, breaks = c(-Inf, 0.5, 1.5, 2.5, 3.5, Inf), labels = c(0, 1, 2, 3, 4))
+}
+
+# Apply the classification function to predictions
+class_test <- sapply(boost.pred, classify)
+table(class_test , df_multi.test$mrjydays)
+
+# Make sure both factors have the same levels
+class_test <- factor(class_test, levels = levels(df_multi.test$mrjydays))
+
+# Compute accuracy
+accuracy <- mean(class_test == df_multi.test$mrjydays)
+accuracy
+```
+
+
+```{r}
+# Create data frames for each model's error
+rf_err1 <- data.frame(Trees = 1:1000, Error = rf.model2$err.rate[,"OOB"], Type = "RF, m=3")
+bag_err1 <- data.frame(Trees = 1:1000, Error = bag.model_multi$err.rate[,"OOB"], Type = "BAG, m=20")
+boost_err1 <- data.frame(Trees = 1:1000, Error = boost.multi$train.error, Type = "BOOST, λ=0.2")
+
+# Combine all error data frames
+model_err1 <- rbind(rf_err1, bag_err1, boost_err1)
+
+# Plot the error rate for each model
+ggplot(data=model_err1, aes(x=Trees, y=Error)) +  geom_line(aes(color=Type)) + ggtitle("Methods vs Errors") +xlim(0,1000)+theme(plot.title = element_text(hjust=0.5))
+```
+## Regression
+```{r}
+featureselection_reg<- randomForest(irmjfm~., data= data, ntree= 1000 , importance = TRUE)
+important_variables2<-importance(featureselection_reg, type=1)
+important_variables2[order(important_variables2, decreasing = TRUE), ]
+```
+#now we subset the variables we want to select for the analysis.
+```{r}
+df.reg<- data %>% select(c('irmjfy','EDUSCHGRD2','yflmjmo','rlgfrnd', 'YFLTMRJ2','iralcage', 'FRDMEVR2','alcflag', 'iralcfy', 'frdmjmon', 'rlgimpt', 'PRMJEVR2', 'stndsmj', 'rlgattd', 'tobflag', 'rlgdcsn', 'iralcfm', 'argupar', 'HEALTH2'))
+```
+```{r}
+
+set.seed(123)
+train.index2<- sample(1:nrow(df.reg), nrow(df.reg)*0.7)
+df.reg.train<- df.reg[train.index2,]
+df.reg.test<- df.reg[-train.index2,]
+```
+#Model1_Desicion tree
+```{r}
+set.seed(123)
+tree.reg.model<-tree(irmjfy~. ,data= df.reg.train)
+summary(tree.reg.model)
+plot(tree.reg.model)
+text(tree.reg.model, pretty = 0)
+predict.tree.reg<- predict(tree.reg.model, newdata= df.reg.test)
+
+mean((predict.tree.reg -df.reg.test$irmjfy)^2)
+```
+
+```{r}
+
+cv.reg <- cv.tree(tree.reg.model)
+names(cv.reg)
+cv.reg
+```
+```{r}
+par(mfrow = c(1, 2))
+plot(cv.reg$size, cv.reg$dev, type = "b")
+plot(cv.reg$k, cv.reg$dev, type = "b")
+```
+```{r}
+prune.reg <- prune.tree(tree.reg.model, best = 4)
+plot(prune.reg)
+text(prune.reg, pretty = 0)
+```
+
+```{r}
+tree.reg.pred.prune <- predict(prune.reg, df.reg.test)
+
+mean((tree.reg.pred.prune- df.reg.test$irmjfy)^2)
+
+```
+
+#we can see that pruning has made an increase in the test mse
+```{r}
+#Bagging
+all_predictors2<- length(df.reg.train)-1
+bag.model.reg <- randomForest(irmjfy ~ ., data = df.reg.train, mtry =all_predictors2 ,ntree= 1000, importance = TRUE)
+bag.model.reg
+```
+```{r}
+
+yhat.reg.bag <- predict(bag.model.reg, newdata = df.reg.test)
+
+mean((yhat.reg.bag- df.reg.test$irmjfy)^2)
+#the mse with boosting is 1363
+```
+```{r}
+importance(bag.model.reg)
+varImpPlot(bag.model.reg)
+```
+#Model2 _ RandomForest
+```{r}
+# Define the values for mtry
+mtry_values <- c(1, 5, 9,13, 18)
+ntrees <- 1000
+
+# Create empty vectors to store error rates and models
+error_rates <- numeric()
+rf_models <- list()
+
+# Loop through each mtry value
+for (mtry_val in mtry_values) {
+  # Fit a random forest model
+  rf_model <- randomForest(irmjfy ~ ., data = df.reg.train, mtry = mtry_val, ntree = ntrees, importance = TRUE)
+  
+  # Store the model
+  rf_models[[as.character(mtry_val)]] <- rf_model
+  
+  # Store the error rate
+  error_rates <- c(error_rates, rf_model$mse)
+}
+
+# Combine error rates and mtry values into a data frame
+model_err <- data.frame(Mtry = rep(mtry_values, each = ntrees),
+                        Trees = rep(1:ntrees, length(mtry_values)),
+                        Error = error_rates)
+
+# Plot the error rate for each model
+ggplot(data = model_err, aes(x = Trees, y = Error, color = factor(Mtry))) +
+  geom_line() +
+  ggtitle("Error vs Number of Trees") +
+  xlim(0, 100) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+# 5 seems to be good number for to choose for the number of  mtry
+
+```{r}
+rf.reg <- randomForest(irmjfy ~ ., data = df.reg.train, mtry =5 ,ntree= 1000, importance = TRUE)
+rf.reg
+yhat.rf <- predict(rf.reg,newdata= df.reg.test)
+mean((yhat.rf - df.reg.test$irmjfy)^2)
+#c
+```
+#comparing the random forest with the two other models seem to give us a better mse
+```{r}
+importance_df.reg <- as.data.frame(importance(rf.reg))
+
+importance_df.reg <- importance_df.reg[order(-importance_df.reg$`%IncMSE`), ]
+
+top_predictors.reg <- head(importance_df.reg, 20)
+
+# Correcting the column names to match the ones in the dataframe
+top_predictors.reg <- top_predictors.reg[, c("%IncMSE", "IncNodePurity")]
+
+top_predictors.reg$PREDICTORS <- rownames(top_predictors.reg)
+
+# Plotting the most important variables
+ggplot(data = top_predictors.reg, aes(x = `%IncMSE`, y = reorder(PREDICTORS, `%IncMSE`))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  ggtitle("Variable Importance for Consumption of Marijuana") +
+  ylab("Variables") +
+  xlab("Mean Decrease in MSE") +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5))
+
+```
+
+
+#Boosting
+```{r}
+# plotting the training error for each number of trees (up to 1000) for each shrinkage value.
+
+# Define the values for shrinkage
+shrinkage_vals <- seq(0.01, 0.2, by = 0.02)
+ntrees <- 1000
+
+# Create empty vectors to store error rates and models
+error_rates <- numeric()
+gbm_models <- list()
+
+# Loop through each shrinkage value
+for (shrinkage_val in shrinkage_vals) {
+  # Fit a gradient boosting model
+  gbm_reg <- gbm(irmjfy ~ ., data = df.reg.train, distribution = "gaussian",
+                   n.trees = ntrees, shrinkage = shrinkage_val)
+  
+  # Store the model
+  gbm_models[[as.character(shrinkage_val)]] <- gbm_reg
+  
+  # Compute the predictions
+  yhat <- predict(gbm_reg, newdata = df.reg.test, n.trees = ntrees)
+  
+  # Compute the MSE
+  mse <- mean((yhat - df.reg.test$irmjfy)^2)
+  
+  # Store the error rate
+  error_rates <- c(error_rates, gbm_reg$train.error)
+}
+
+# Combine error rates and shrinkage values into a data frame
+model_err <- data.frame(Shrinkage = rep(shrinkage_vals, each = ntrees),
+                        Trees = rep(1:ntrees, length(shrinkage_vals)),
+                        Error = error_rates)
+
+# Plot the error rate for each model
+ggplot(data = model_err, aes(x = Trees, y = Error, color = factor(Shrinkage))) +
+  geom_line() +
+  ggtitle("Error vs Number of Trees") +
+  xlim(0, 100) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+```{r}
+boost.reg<- gbm(irmjfy ~. , data = df.reg.train,distribution = "gaussian", n.trees = 1000,shrinkage =0.19)
+boost.pred.reg <- predict(boost.reg,df.reg.test,n.trees = 1000)
+mean((boost.pred.reg- df.reg.test$irmjfy)^2)
+```
+
+```{r}
+# Create data frames for each model's error
+rf_err <- data.frame(Trees = 1:1000, Error = rf.reg$mse, Type = "RF, m=5")
+bag_err <- data.frame(Trees = 1:1000, Error = bag.model.reg$mse, Type = "BAG, m=17")
+boost_err <- data.frame(Trees = 1:1000, Error = boost.reg$train.error, Type = "BOOST, λ=0.19")
+
+# Combine all error data frames
+model_err <- rbind(rf_err, bag_err, boost_err)
+
+# Plot the error rate for each model
+ggplot(data = model_err, aes(x = Trees, y = Error, color = Type)) +
+  geom_line() +
+  ggtitle("Error vs Number of Trees") +
+  xlim(0, 1000) +
+  ylim(1000, 2500) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  guides(color = guide_legend(title = "Methods, Parameters"))
+
+```
+
